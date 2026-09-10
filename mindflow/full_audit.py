@@ -348,7 +348,8 @@ try:
         driver.execute_script(f"window.app.mindmap.selectNode('{root_id}');")
         time.sleep(0.2)
         canvas = driver.find_element(By.ID, "mindmap-canvas")
-        ActionChains(driver).move_to_element_with_offset(canvas, 30, 30).click().perform()
+        w, h = canvas.size['width'], canvas.size['height']
+        ActionChains(driver).move_to_element_with_offset(canvas, -w//2 + 50, -h//2 + 100).click().perform()
         time.sleep(0.3)
         after_click = driver.execute_script("return window.app.mindmap.getSelectedNode();")
         test("21.1 Clicking empty canvas deselects node", after_click is None)
@@ -360,7 +361,8 @@ try:
         driver.execute_script(f"window.app.mindmap.selectNode('{root_id}');")
         time.sleep(0.2)
         canvas = driver.find_element(By.ID, "mindmap-canvas")
-        ActionChains(driver).move_to_element_with_offset(canvas, 30, 30).double_click().perform()
+        w, h = canvas.size['width'], canvas.size['height']
+        ActionChains(driver).move_to_element_with_offset(canvas, -w//2 + 50, -h//2 + 100).double_click().perform()
         time.sleep(0.3)
         after_dblclick = driver.execute_script("return window.app.mindmap.getSelectedNode();")
         test("22.1 Double-clicking empty canvas deselects node", after_dblclick is None)

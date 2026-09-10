@@ -226,6 +226,7 @@ class App {
   }
 
   hideAllContextBoxes() {
+    this.hideContextMenu();
     $('#node-formatting-bar')?.classList.add('hidden');
     $('#line-context-box')?.classList.add('hidden');
     $('#context-menu')?.classList.remove('open');
@@ -592,6 +593,7 @@ class App {
     // Position menu
     menu.style.left = `${e.clientX}px`;
     menu.style.top = `${e.clientY}px`;
+    menu.classList.remove('hidden');
     menu.classList.add('open');
 
     // Ensure menu stays within viewport
@@ -608,13 +610,10 @@ class App {
 
   hideContextMenu() {
     const menu = $('#context-menu');
-    menu.classList.remove('open');
-  }
-
-  hideAllContextBoxes() {
-    this.hideContextMenu();
-    $('#line-context-box')?.classList.add('hidden');
-    $('#node-formatting-bar')?.classList.add('hidden');
+    if (menu) {
+      menu.classList.remove('open');
+      menu.classList.add('hidden');
+    }
   }
 
   // ==================== LINE CONTEXT MENU ====================
@@ -651,16 +650,22 @@ class App {
 
       const arrow = childNode.lineArrow || 'none';
       box.querySelectorAll('.line-arrow-val-btn').forEach(b => {
-        b.classList.toggle('active', b.dataset.arrow === arrow);
+        b.classList.toggle('active', b.dataset.arrow === (arrow === true ? 'end' : arrow));
       });
+
+      const textInput = $('#line-text-input');
+      if (textInput) {
+        textInput.value = childNode.lineText || '';
+      }
     }
 
-    if (e && e.clientX && e.clientY) {
-      box.style.left = `${Math.min(window.innerWidth - 310, Math.max(10, e.clientX + 10))}px`;
-      box.style.top = `${Math.min(window.innerHeight - 400, Math.max(70, e.clientY - 20))}px`;
-    }
+    const clientX = (e && typeof e.clientX === 'number') ? e.clientX : 200;
+    const clientY = (e && typeof e.clientY === 'number') ? e.clientY : 200;
+    box.style.left = `${Math.min(window.innerWidth - 310, Math.max(10, clientX + 10))}px`;
+    box.style.top = `${Math.min(window.innerHeight - 300, Math.max(70, clientY - 20))}px`;
     box.classList.remove('hidden');
     this.clampToViewport(box);
+    this.renderMap();
   }
 
   // ==================== PROPERTIES PANEL ====================
@@ -1391,6 +1396,10 @@ class App {
     });
   }
 
+  setupLineMenuListeners() {
+    // Legacy alias redirecting to line context box
+  }
+
   setupLineContextBoxListeners() {
     const box = $('#line-context-box');
     if (!box) return;
@@ -1477,6 +1486,18 @@ class App {
         this.renderMap();
       });
     });
+
+    // Line Text / Label input
+    const textInput = $('#line-text-input');
+    if (textInput) {
+      textInput.addEventListener('input', () => {
+        const val = textInput.value;
+        if (this.selectedLineChildId) {
+          this.mindmap.updateNode(this.selectedLineChildId, { lineText: val });
+          this.renderMap();
+        }
+      });
+    }
 
     $('#btn-delete-line')?.addEventListener('click', () => {
       if (this.selectedLineChildId) {
@@ -1683,166 +1704,6 @@ class App {
     });
   }
 
-  // ==================== LINE CONTEXT BOX LISTENERS ====================
-
-  handleLineClick(parentId, childId, e) {
-    this.selectedLineChildId = childId;
-    this.allLinesSelected = false;
-
-    const box = $('#line-context-box');
-    const childNode = this.mindmap.findNode(childId);
-    if (!box || !childNode) return;
-
-    // Sync box controls
-    const w = childNode.lineWidth || 2;
-    const op = childNode.lineOpacity !== null && childNode.lineOpacity !== undefined ? childNode.lineOpacity : 1.0;
-    const dash = childNode.lineDash || 'solid';
-    const color = childNode.lineColor || 'inherit';
-    const arrow = childNode.lineArrow || 'none';
-
-    box.querySelectorAll('.line-val-btn[data-width]').forEach(b => {
-      b.classList.toggle('active', parseInt(b.dataset.width) === w);
-    });
-
-    box.querySelectorAll('.line-val-btn[data-opacity]').forEach(b => {
-      b.classList.toggle('active', parseFloat(b.dataset.opacity) === op);
-    });
-
-    box.querySelectorAll('.line-val-btn[data-dash]').forEach(b => {
-      b.classList.toggle('active', b.dataset.dash === dash);
-    });
-
-    box.querySelectorAll('.line-swatch').forEach(s => {
-      s.classList.toggle('active', s.dataset.lineColor === color);
-    });
-
-    box.querySelectorAll('.line-arrow-val-btn').forEach(b => {
-      b.classList.toggle('active', b.dataset.arrow === (arrow === true ? 'end' : arrow));
-    });
-
-    const textInput = $('#line-text-input');
-    if (textInput) {
-      textInput.value = childNode.lineText || '';
-    }
-
-    box.style.left = `${Math.min(window.innerWidth - 310, Math.max(10, e.clientX || 200))}px`;
-    box.style.top = `${Math.min(window.innerHeight - 300, Math.max(70, e.clientY || 200))}px`;
-    box.classList.remove('hidden');
-
-    this.renderMap();
-  }
-
-  setupLineMenuListeners() {
-    // Legacy container alias redirecting to line context box
-  }
-
-  setupLineContextBoxListeners() {
-    const box = $('#line-context-box');
-    if (!box) return;
-
-    $('#line-box-close')?.addEventListener('click', () => {
-      box.classList.add('hidden');
-      this.allLinesSelected = false;
-      this.selectedLineChildId = null;
-      $('#btn-select-all-lines')?.classList.remove('active');
-      this.renderMap();
-    });
-
-    // Width buttons
-    box.querySelectorAll('.line-val-btn[data-width]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        box.querySelectorAll('.line-val-btn[data-width]').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        const width = parseInt(btn.dataset.width);
-        if (this.selectedLineChildId) {
-          this.mindmap.updateNode(this.selectedLineChildId, { lineWidth: width });
-        } else {
-          this.mindmap.setGlobalLineStyle({ width });
-        }
-      });
-    });
-
-    // Opacity buttons
-    box.querySelectorAll('.line-val-btn[data-opacity]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        box.querySelectorAll('.line-val-btn[data-opacity]').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        const opacity = parseFloat(btn.dataset.opacity);
-        if (this.selectedLineChildId) {
-          this.mindmap.updateNode(this.selectedLineChildId, { lineOpacity: opacity });
-        } else {
-          this.mindmap.setGlobalLineStyle({ opacity });
-        }
-      });
-    });
-
-    // Dash style buttons
-    box.querySelectorAll('.line-val-btn[data-dash]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        box.querySelectorAll('.line-val-btn[data-dash]').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        const dash = btn.dataset.dash;
-        if (this.selectedLineChildId) {
-          this.mindmap.updateNode(this.selectedLineChildId, { lineDash: dash });
-        } else {
-          this.mindmap.setGlobalLineStyle({ dash });
-        }
-      });
-    });
-
-    // Color swatches
-    box.querySelectorAll('.line-swatch').forEach(swatch => {
-      swatch.addEventListener('click', () => {
-        box.querySelectorAll('.line-swatch').forEach(s => s.classList.remove('active'));
-        swatch.classList.add('active');
-        const color = swatch.dataset.lineColor;
-        if (this.selectedLineChildId) {
-          this.mindmap.updateNode(this.selectedLineChildId, { lineColor: color === 'inherit' ? null : color });
-        } else {
-          this.mindmap.setGlobalLineStyle({ color: color === 'inherit' ? null : color });
-        }
-      });
-    });
-
-    // Arrow direction buttons
-    box.querySelectorAll('.line-arrow-val-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        box.querySelectorAll('.line-arrow-val-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        const arrow = btn.dataset.arrow;
-        if (this.selectedLineChildId) {
-          this.mindmap.updateNode(this.selectedLineChildId, { lineArrow: arrow });
-        } else {
-          this.mindmap.setGlobalLineStyle({ arrow });
-        }
-      });
-    });
-
-    // Line Text / Label input
-    const textInput = $('#line-text-input');
-    if (textInput) {
-      textInput.addEventListener('input', () => {
-        const val = textInput.value;
-        if (this.selectedLineChildId) {
-          this.mindmap.updateNode(this.selectedLineChildId, { lineText: val });
-          this.renderMap();
-        }
-      });
-    }
-
-    // Xóa Line (Tách Node)
-    $('#btn-delete-line')?.addEventListener('click', () => {
-      if (this.selectedLineChildId) {
-        this.mindmap.detachNode(this.selectedLineChildId);
-        this.selectedLineChildId = null;
-        box.classList.add('hidden');
-        showToast('Tách Node thành công! Node đã trở thành Central Topic tự do.', 'success', 2500);
-      } else {
-        showToast('Vui lòng chọn 1 line cụ thể để tách node', 'info', 2000);
-      }
-    });
-  }
-
   // ==================== CANVAS CLICK ====================
 
   setupCanvasClickListener() {
@@ -1863,8 +1724,13 @@ class App {
 
     $('#mindmap-canvas')?.addEventListener('click', deselectAndExitNode);
     $('#mindmap-canvas')?.addEventListener('dblclick', deselectAndExitNode);
+    $('#canvas-transform')?.addEventListener('click', deselectAndExitNode);
+    $('#canvas-transform')?.addEventListener('dblclick', deselectAndExitNode);
 
     document.addEventListener('click', (e) => {
+      if (e.target.closest('#mindmap-canvas') && !e.target.closest('.mindmap-node')) {
+        deselectAndExitNode(e);
+      }
       if (!e.target.closest('#line-context-box') && !e.target.closest('#btn-select-all-lines') && !e.target.closest('.connector-path')) {
         $('#line-context-box')?.classList.add('hidden');
       }
@@ -1873,6 +1739,12 @@ class App {
       }
       if (!e.target.closest('#context-menu')) {
         this.hideContextMenu();
+      }
+    });
+
+    document.addEventListener('dblclick', (e) => {
+      if (e.target.closest('#mindmap-canvas') && !e.target.closest('.mindmap-node')) {
+        deselectAndExitNode(e);
       }
     });
 

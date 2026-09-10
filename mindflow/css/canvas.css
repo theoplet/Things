@@ -403,21 +403,11 @@
   stroke-dasharray: 2, 5;
 }
 
-/* Node color variants */
-.node-color-purple { border-left: 3px solid var(--node-color-purple); }
-.node-color-blue { border-left: 3px solid var(--node-color-blue); }
-.node-color-teal { border-left: 3px solid var(--node-color-teal); }
-.node-color-green { border-left: 3px solid var(--node-color-green); }
-.node-color-yellow { border-left: 3px solid var(--node-color-yellow); }
-.node-color-orange { border-left: 3px solid var(--node-color-orange); }
-.node-color-red { border-left: 3px solid var(--node-color-red); }
-.node-color-pink { border-left: 3px solid var(--node-color-pink); }
-
 /* Image grid: max 3 per row with tight gap */
 .node-images-container {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 2px;
   padding: 2px;
   margin-bottom: 4px;
   width: 100%;

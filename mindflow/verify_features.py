@@ -97,7 +97,7 @@ try:
             hl_btn.click()
             time.sleep(0.4)
             yellow_swatch = driver.find_element(By.CSS_SELECTOR, "div[data-highlight='#FEF08A']")
-            yellow_swatch.click()
+            driver.execute_script("arguments[0].click();", yellow_swatch)
             time.sleep(0.5)
             save_shot("evidence_06_node_formatting_highlight")
 

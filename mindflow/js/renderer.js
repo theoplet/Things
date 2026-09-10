@@ -87,9 +87,6 @@ export class Renderer {
     const isRoot = layoutInfo.depth === 0;
     const element = document.createElement('div');
     element.className = `mindmap-node ${isRoot ? 'root-node' : ''} animate-node-appear`;
-    if (node.color) {
-      element.classList.add(`node-color-${node.color.replace('#', '')}`);
-    }
     element.dataset.nodeId = node.id;
     
     element.style.position = 'absolute';
@@ -152,8 +149,7 @@ export class Renderer {
     textSpan.contentEditable = 'false';
     textSpan.innerHTML = this.formatNodeText(node.text);
 
-    const textStr = node.text || '';
-    if (textStr.includes('\\') || textStr.includes('$')) {
+    if (this.containsRealMath(node.text)) {
       element.classList.add('has-math');
     }
 
@@ -411,8 +407,7 @@ export class Renderer {
       if (textSpan.innerHTML !== formatted) {
         textSpan.innerHTML = formatted;
       }
-      const textStr = node.text || '';
-      if (textStr.includes('\\') || textStr.includes('$')) {
+      if (this.containsRealMath(node.text)) {
         element.classList.add('has-math');
       } else {
         element.classList.remove('has-math');
@@ -539,11 +534,14 @@ export class Renderer {
     }
 
     // Update colors
+    const wasSelected = element.classList.contains('selected');
+    const wasEditing = element.classList.contains('editing');
+    const hadMath = element.classList.contains('has-math');
     element.className = `mindmap-node ${isRoot ? 'root-node' : ''}`;
-    if (element.classList.contains('selected')) element.classList.add('selected');
-    if (element.classList.contains('editing')) element.classList.add('editing');
+    if (wasSelected) element.classList.add('selected');
+    if (wasEditing) element.classList.add('editing');
+    if (hadMath) element.classList.add('has-math');
     if (node.color) {
-      element.classList.add(`node-color-${node.color.replace('#', '')}`);
       if (!isRoot) {
         element.style.borderLeft = `3px solid ${node.color}`;
       } else {
@@ -678,6 +676,12 @@ export class Renderer {
         if (!pathElement) {
           pathElement = document.createElementNS('http://www.w3.org/2000/svg', 'path');
           pathElement.setAttribute('class', 'connector-path');
+          pathElement.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (this.onLineClick) {
+              this.onLineClick(node.id, child.id, pathElement, e);
+            }
+          });
           this.svg.appendChild(pathElement);
           this.connectorElements.set(pathId, pathElement);
 
@@ -1195,6 +1199,41 @@ export class Renderer {
     }
   }
 
+  looksLikeInlineMath(formula) {
+    if (!formula || typeof formula !== 'string') return false;
+    const trimmed = formula.trim();
+    if (!trimmed) return false;
+    // Markdown/LaTeX standard: $ formula $ with leading/trailing spaces is plain text, not inline math
+    if (formula.startsWith(' ') || formula.endsWith(' ')) return false;
+    // LaTeX command or syntax chars (\, ^, _, {, })
+    if (/[\\^_{}]/.test(trimmed)) return true;
+    // Vietnamese or non-ascii accented language letters
+    if (/[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(trimmed)) return false;
+    // Multiple natural language words (2+ letters followed by space and another word)
+    if (/[a-zA-Z]{2,}\s+[a-zA-Z]{2,}/.test(trimmed)) return false;
+    // Math expression: letters, digits, operators, brackets, relations, punctuation, whitespace
+    return /^[a-zA-Z0-9+\-*/=().,<>\s]+$/.test(trimmed);
+  }
+
+  containsRealMath(rawText) {
+    if (!rawText) return false;
+    const text = String(rawText);
+    if (text.includes('$$') || text.includes('\\[') || text.includes('\\(') || text.includes('\\begin{')) {
+      return true;
+    }
+    if (text.trim().startsWith('\\')) {
+      return true;
+    }
+    const mathRegex = /(?<!\\)\$([^$\n]+?)\$/g;
+    let match;
+    while ((match = mathRegex.exec(text)) !== null) {
+      if (this.looksLikeInlineMath(match[1])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   formatNodeText(rawText) {
     if (!rawText) return '';
     let text = String(rawText);
@@ -1247,6 +1286,12 @@ export class Renderer {
       } else if (fullMatch.startsWith('$') && fullMatch.endsWith('$')) {
         formula = fullMatch.slice(1, -1);
         isDisplay = false;
+        if (!this.looksLikeInlineMath(formula)) {
+          // Not real math (e.g. currency "$5 và $10"), keep original text
+          result += escapeText(fullMatch);
+          lastIdx = mathRegex.lastIndex;
+          continue;
+        }
       }
 
       if (formula) {

@@ -125,8 +125,8 @@ export class MindMap {
 
     delete node.relativeX;
     delete node.relativeY;
-    if (node.x !== undefined && node.x !== 0) node.customX = node.x;
-    if (node.y !== undefined && node.y !== 0) node.customY = node.y;
+    if (node.x !== undefined) node.customX = node.x;
+    if (node.y !== undefined) node.customY = node.y;
 
     this.roots.push(node);
     this._rebuildNodeMap();
