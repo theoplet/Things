@@ -529,7 +529,8 @@
     <div style="height: 1px; background: var(--color-border); margin: 4px 6px;"></div>
     <div class="dropdown-item" data-action="copy"><span>📋</span><span data-i18n="context.copy">Copy Branch</span><span class="shortcut">Ctrl+C</span></div>
     <div class="dropdown-item" data-action="paste"><span>📄</span><span data-i18n="context.paste">Paste Branch</span><span class="shortcut">Ctrl+V</span></div>
-    <div class="dropdown-item" data-action="resetPosition"><span>📐</span><span data-i18n="toolbar.autoLayout">Auto-Layout Node</span></div>
+    <div class="dropdown-item" data-action="resetPosition"><span>📍</span><span data-i18n="toolbar.autoLayout">Auto-Layout Node</span></div>
+    <div class="dropdown-item" data-action="autofitNode"><span>📐</span><span data-i18n="context.autofit">Auto-Fit Kích Thước Node</span></div>
     <div style="height: 1px; background: var(--color-border); margin: 4px 6px;"></div>
     <div class="dropdown-item" data-action="delete" style="color: #EF4444;"><span>🗑️</span><span data-i18n="context.delete">Delete Node</span><span class="shortcut">Del</span></div>
   </div>
@@ -653,8 +654,11 @@
     </div>
 
     <div class="right-editor-footer">
-      <button id="btn-apply-right-editor" class="btn btn-primary btn-lg" style="flex: 1; background: linear-gradient(135deg, #8B5CF6, #EC4899); font-weight: 700;">
-        ✨ Lưu Vào Node (Auto-Fit)
+      <button id="btn-apply-right-editor" class="btn btn-primary btn-lg" style="flex: 1; background: linear-gradient(135deg, #8B5CF6, #EC4899); font-weight: 700;" title="Lưu nội dung vào node (giữ nguyên kích thước đã chỉnh nếu có)">
+        💾 <span data-i18n="editor.saveNode">Lưu vào Node</span>
+      </button>
+      <button id="btn-autofit-right-editor" class="btn btn-secondary btn-lg" style="padding: 10px 14px; background: rgba(139, 92, 246, 0.18); border: 1px solid #8B5CF6; color: #C4B5FD; font-weight: 600;" title="Tự động căn chỉnh kích thước node vừa khít với nội dung">
+        📐 <span data-i18n="editor.autofit">Auto-Fit</span>
       </button>
       <button id="btn-cancel-right-editor" class="btn btn-secondary" style="padding: 10px 16px;">
         Hủy

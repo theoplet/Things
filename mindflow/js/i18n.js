@@ -98,9 +98,16 @@ export class I18n {
         'context.copy': 'Copy Branch',
         'context.paste': 'Paste Branch',
         'context.aiExpand': 'AI: Expand Ideas',
+        'context.autofit': 'Auto-Fit Node Size',
+
+        // Editor
+        'editor.saveNode': 'Save to Node',
+        'editor.autofit': 'Auto-Fit',
         
         // Toasts
         'toast.saved': 'Map saved successfully',
+        'toast.savedNode': 'Saved changes to node',
+        'toast.autofitNode': 'Auto-fitted node size (Auto-Fit)',
         'toast.exported': 'Map exported successfully',
         'toast.imported': 'Map imported successfully',
         'toast.deleted': 'Node deleted',
@@ -244,9 +251,16 @@ export class I18n {
         'context.copy': 'Sao chép nhánh',
         'context.paste': 'Dán nhánh',
         'context.aiExpand': 'AI: Mở rộng ý tưởng',
+        'context.autofit': 'Auto-Fit Kích Thước Node',
+
+        // Editor
+        'editor.saveNode': 'Lưu vào Node',
+        'editor.autofit': 'Auto-Fit',
         
         // Toasts
         'toast.saved': 'Đã lưu bản đồ',
+        'toast.savedNode': 'Đã lưu thay đổi vào Node',
+        'toast.autofitNode': 'Đã tự động căn chỉnh kích thước node (Auto-Fit)',
         'toast.exported': 'Đã xuất bản đồ',
         'toast.imported': 'Đã nhập bản đồ',
         'toast.deleted': 'Đã xóa nhánh',

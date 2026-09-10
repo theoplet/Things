@@ -1679,6 +1679,11 @@ class App {
           case 'aiExpand':
             this.handleAIExpand(selected);
             break;
+          case 'autofitNode':
+            if (selected) {
+              this.autofitNode(selected.id);
+            }
+            break;
           case 'resetPosition':
             if (selected) {
               this.mindmap.resetPositions(selected.id);
@@ -2802,7 +2807,7 @@ class App {
     });
   }
 
-  applyRightEditorToNode() {
+  applyRightEditorToNode(autoFit = false) {
     if (!this.editingRightNodeId) return;
 
     const contentEl = $('#right-editor-content');
@@ -2817,25 +2822,48 @@ class App {
     const fontSize = parseInt($('#right-fmt-font-size')?.value || 14);
     const fontFamily = $('#right-fmt-font-family')?.value || 'Inter';
 
-    // Single atomic update to node (clearing custom dimensions automatically triggers 1 single saveState)
-    this.mindmap.updateNode(this.editingRightNodeId, {
+    const updatePayload = {
       text: newText,
       fontSize: fontSize,
       fontFamily: fontFamily,
-      images: this.rightEditorImages,
+      images: this.rightEditorImages
+    };
+
+    if (autoFit) {
+      updatePayload.customWidth = undefined;
+      updatePayload.customHeight = undefined;
+    }
+
+    // Single atomic update to node
+    this.mindmap.updateNode(this.editingRightNodeId, updatePayload);
+
+    if (autoFit) {
+      showToast('📐 ' + (this.i18n ? this.i18n.t('toast.autofitNode') : 'Đã lưu & Tự động căn chỉnh kích thước (Auto-Fit)!'), 'success', 2000);
+    } else {
+      showToast('💾 ' + (this.i18n ? this.i18n.t('toast.savedNode') : 'Đã lưu thay đổi vào Node!'), 'success', 2000);
+    }
+    this.closeRightEditorPanel();
+    this.renderMap();
+  }
+
+  autofitNode(nodeId) {
+    const id = nodeId || this.mindmap.selectedNodeId;
+    if (!id) return;
+    const node = this.mindmap.findNode(id);
+    if (!node) return;
+    this.mindmap.updateNode(id, {
       customWidth: undefined,
       customHeight: undefined
     });
-
-    showToast('✨ Đã lưu vào Node & Tự động căn chỉnh kích thước (Auto-fit)!', 'success', 2000);
-    this.closeRightEditorPanel();
     this.renderMap();
+    showToast('📐 ' + (this.i18n ? this.i18n.t('toast.autofitNode') : 'Đã tự động căn chỉnh kích thước node (Auto-Fit)!'), 'success', 2000);
   }
 
   setupRightEditorPanelListeners() {
     $('#btn-close-right-editor')?.addEventListener('click', () => this.closeRightEditorPanel());
     $('#btn-cancel-right-editor')?.addEventListener('click', () => this.closeRightEditorPanel());
-    $('#btn-apply-right-editor')?.addEventListener('click', () => this.applyRightEditorToNode());
+    $('#btn-apply-right-editor')?.addEventListener('click', () => this.applyRightEditorToNode(false));
+    $('#btn-autofit-right-editor')?.addEventListener('click', () => this.applyRightEditorToNode(true));
 
     // Local Undo / Redo in Context Box
     $('#right-fmt-undo')?.addEventListener('click', () => this.undoRightEditor());
@@ -2862,7 +2890,11 @@ class App {
       } else if (isCtrl && (e.key === 'Enter' || e.key === 's' || e.key === 'S')) {
         e.preventDefault();
         e.stopPropagation();
-        this.applyRightEditorToNode();
+        if (e.shiftKey) {
+          this.applyRightEditorToNode(true);
+        } else {
+          this.applyRightEditorToNode(false);
+        }
       } else if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
