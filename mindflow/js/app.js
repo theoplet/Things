@@ -678,7 +678,7 @@ class App {
 
     // Update color swatches
     document.querySelectorAll('#color-picker .color-swatch').forEach(swatch => {
-      swatch.classList.toggle('active', swatch.dataset.color === node.color);
+      swatch.classList.toggle('active', (swatch.dataset.color || '') === (node.color || ''));
     });
 
     // Update notes
@@ -1572,7 +1572,7 @@ class App {
     // Color picker
     document.querySelectorAll('#color-picker .color-swatch').forEach(swatch => {
       swatch.addEventListener('click', () => {
-        const color = swatch.dataset.color;
+        const color = swatch.dataset.color || null;
         const selected = this.mindmap.getSelectedNode();
         if (selected) {
           this.mindmap.updateNode(selected.id, { color });
