@@ -4,7 +4,7 @@
  * History, Storage, Exporter, Importer, Theme, I18n, AI
  */
 
-import { $, showToast, generateId, debounce, deepClone } from './utils.js';
+import { $, showToast, generateId, debounce, deepClone, compressImageFile } from './utils.js';
 import { MindMap } from './mindmap.js';
 import { Layout } from './layout.js';
 import { Renderer } from './renderer.js';
@@ -18,6 +18,7 @@ import { Theme } from './theme.js';
 import { I18n } from './i18n.js';
 import { AI } from './ai.js';
 import { GDrive } from './gdrive.js';
+import { parseDriveState, clearDriveState } from './drive_state.js';
 import { MathEditor } from './math_editor.js';
 import {
   attachSmartEditor,
@@ -50,6 +51,8 @@ class App {
 
     // State
     this.currentMapId = null;
+    this.currentMapDriveId = null;
+    this.pendingDriveFolderId = null;
     this.currentMapName = 'Untitled Map';
     this.clipboard = null;
     this.isEditing = false;
@@ -62,6 +65,8 @@ class App {
     this.rightEditorImages = [];
     this.rightEditorHistory = null;
     this.nodeEditorHistories = new Map();
+    this.selectedConnectionId = null;
+    this.connectMode = null;
 
     // DOM references (set in init)
     this.canvas = null;
@@ -71,7 +76,7 @@ class App {
   /**
    * Initialize the application
    */
-  init() {
+  async init() {
     // Initialize theme & i18n & gdrive
     this.theme.init();
     this.i18n.init();
@@ -118,7 +123,12 @@ class App {
       });
     };
     this.renderer.onLineClick = (parentId, childId, pathEl, e) => {
+      this.selectedConnectionId = null;
+      if (this.renderer) this.renderer.selectedConnectionId = null;
       this.handleLineClick(parentId, childId, e);
+    };
+    this.renderer.onFreeLineClick = (connectionId, pathEl, e) => {
+      this.handleFreeConnectionClick(connectionId, e);
     };
 
     // Set up mindmap event listeners
@@ -189,8 +199,11 @@ class App {
       }
     });
 
-    // Load or create map
-    this.loadInitialMap();
+    // Load or create map (handling Google Drive UI entry if triggered)
+    const handledDrive = await this.handleDriveEntry();
+    if (!handledDrive) {
+      this.loadInitialMap();
+    }
 
     // Update language label
     this.updateLangLabel();
@@ -202,6 +215,98 @@ class App {
   }
 
   // ==================== MAP LOADING ====================
+
+  /**
+   * Handle incoming Google Drive UI Integration actions ("open" or "create" via ?state=)
+   * @returns {Promise<boolean>} true if Drive action was handled, false otherwise
+   */
+  async handleDriveEntry() {
+    const driveState = parseDriveState();
+    if (!driveState || !driveState.action) {
+      return false;
+    }
+
+    try {
+      if (driveState.action === 'open') {
+        const fileId = driveState.ids && driveState.ids.length > 0 ? driveState.ids[0] : null;
+        if (!fileId) {
+          console.warn('Google Drive open action missing file ID in state:', driveState);
+          clearDriveState();
+          return false;
+        }
+
+        const resourceKey = driveState.resourceKeys ? driveState.resourceKeys[fileId] : undefined;
+
+        showToast(this.i18n.t('gdrive.loading') || 'Đang mở sơ đồ từ Google Drive...', 'info', 4000);
+
+        // Ensure OAuth token (silent first with userId hint)
+        if (this.gdrive.hasClientId()) {
+          try {
+            await this.gdrive.ensureToken(driveState.userId || '');
+          } catch (authErr) {
+            console.warn('Silent Google Drive auth did not complete:', authErr);
+          }
+        }
+
+        if (!this.gdrive.isConnected()) {
+          // Not connected yet - show GDrive modal to let user connect or authorize
+          showToast('Vui lòng kết nối Google Drive để mở tệp', 'error', 4000);
+          this.showGDriveModal();
+          clearDriveState();
+          return false;
+        }
+
+        // Download file content (auto decompresses gzip if needed)
+        const fileText = await this.gdrive.downloadFileText(fileId, resourceKey);
+
+        // Fetch file metadata for proper map name if possible
+        let fileName = null;
+        try {
+          const meta = await this.gdrive.getFileMeta(fileId, resourceKey);
+          if (meta && meta.name) {
+            fileName = meta.name.replace(/\.(mindflow|json)$/i, '');
+          }
+        } catch (metaErr) {
+          console.warn('Could not fetch file meta, fallback to content name:', metaErr);
+        }
+
+        // Parse and apply mindmap
+        const result = await this.importer.importJSONAsync(fileText);
+        if (fileName) {
+          result.name = fileName;
+        }
+
+        await this.applyImportedResult(result);
+        this.currentMapDriveId = fileId;
+        this.pendingDriveFolderId = null;
+
+        clearDriveState();
+        return true;
+      }
+
+      if (driveState.action === 'create') {
+        this.createNewMap();
+        this.currentMapDriveId = null;
+        this.pendingDriveFolderId = driveState.folderId || null;
+
+        if (this.gdrive.hasClientId() && driveState.userId) {
+          this.gdrive.ensureToken(driveState.userId).catch(() => {});
+        }
+
+        clearDriveState();
+        showToast('Sơ đồ mới sẵn sàng lưu vào Google Drive!', 'info', 3000);
+        return true;
+      }
+
+      clearDriveState();
+      return false;
+    } catch (err) {
+      console.error('Failed to handle Google Drive entry:', err);
+      showToast('Lỗi khi mở từ Google Drive: ' + (err.message || err), 'error', 4000);
+      clearDriveState();
+      return false;
+    }
+  }
 
   loadInitialMap() {
     const lastMapId = this.storage.getPreference('lastMapId', null);
@@ -333,7 +438,7 @@ class App {
     // Pass 1: Compute layout & render DOM elements
     let { nodes, bounds } = this.layout.computeLayout(this.mindmap.roots);
     let layoutArray = this._buildLayoutArray(nodes);
-    this.renderer.renderTree(this.mindmap.roots, layoutArray, this.mindmap.globalLineStyle, this.allLinesSelected);
+    this.renderer.renderTree(this.mindmap.roots, layoutArray, this.mindmap.globalLineStyle, this.allLinesSelected, this.mindmap.connections);
 
     // Skip Pass 2 measurement during active dragging or text editing to guarantee zero reflow & keep selection intact!
     if (this.renderer && this.renderer.dragState && this.renderer.dragState.isDragging) return;
@@ -347,28 +452,42 @@ class App {
       if (node && !node.customWidth && !node.customHeight) {
         const isRoot = node.id === this.mindmap.root?.id || this.mindmap.isRoot(node.id);
         const imagesCount = (node.images && node.images.length) ? node.images.length : (node.image ? 1 : 0);
-        let targetMaxWidth = isRoot ? 460 : 360;
-        if (imagesCount > 0) {
-          targetMaxWidth = Math.max(targetMaxWidth, Math.min(520, imagesCount * 170 + 60));
-        }
-
         const prevW = el.style.width;
         const prevH = el.style.height;
         const prevMaxW = el.style.maxWidth;
+        const prevMinH = el.style.minHeight;
+
+        const textSpan = el.querySelector('.node-text');
+        const prevTextWs = textSpan ? textSpan.style.whiteSpace : '';
+        if (textSpan) {
+          textSpan.style.whiteSpace = 'pre';
+        }
 
         el.style.width = 'auto';
         el.style.height = 'auto';
-        el.style.maxWidth = `${targetMaxWidth}px`;
+        el.style.minHeight = '0px';
+        el.style.maxWidth = '1500px';
 
-        const realW = el.offsetWidth;
+        let realW = Math.ceil(el.offsetWidth) + 14;
         let realH = el.offsetHeight;
 
-        if (el.scrollHeight > el.clientHeight) {
+        if (el.scrollHeight > el.clientHeight + 4) {
           realH = Math.max(realH, el.scrollHeight + 8);
+        }
+
+        // Safety clamp on measured DOM size
+        const maxSafeW = 1600;
+        const maxSafeH = 1500;
+        realW = Math.min(realW, maxSafeW);
+        realH = Math.min(realH, maxSafeH);
+
+        if (textSpan) {
+          textSpan.style.whiteSpace = prevTextWs;
         }
 
         el.style.width = prevW;
         el.style.height = prevH;
+        el.style.minHeight = prevMinH;
         el.style.maxWidth = prevMaxW;
 
         if (!node.measuredWidth || !node.measuredHeight || Math.abs(node.measuredWidth - realW) > 3 || Math.abs(node.measuredHeight - realH) > 3) {
@@ -385,7 +504,7 @@ class App {
       nodes = result.nodes;
       bounds = result.bounds;
       layoutArray = this._buildLayoutArray(nodes);
-      this.renderer.renderTree(this.mindmap.roots, layoutArray, this.mindmap.globalLineStyle, this.allLinesSelected);
+      this.renderer.renderTree(this.mindmap.roots, layoutArray, this.mindmap.globalLineStyle, this.allLinesSelected, this.mindmap.connections);
     }
 
     this.lastBounds = bounds;
@@ -463,7 +582,12 @@ class App {
   }
 
   triggerAutoSave = debounce(() => {
-    if (this.currentMapId && this.mindmap.root) {
+    if (!this.mindmap) return;
+    if (!this.currentMapId) {
+      this.currentMapId = generateId();
+    }
+    this.currentMapName = $('#map-name')?.value?.trim() || (this.i18n ? this.i18n.t('map.untitled') : 'Untitled Map');
+    if (this.mindmap.root) {
       this.storage.autoSave(this.currentMapId, this.mindmap.toJSON(), this.currentMapName);
     }
   }, 1000);
@@ -477,15 +601,23 @@ class App {
     }
     if (this.connectingSourceNodeId) {
       if (nodeId !== this.connectingSourceNodeId) {
-        if (this.mindmap.moveNode(this.connectingSourceNodeId, nodeId)) {
-          showToast('🔗 Nối Node thành công! Lines đã được cập nhật.', 'success', 2500);
+        if (this.connectMode === 'freeline') {
+          this.mindmap.addConnection(this.connectingSourceNodeId, nodeId);
+          showToast('↗️ Đã tạo đường nối tự do thành công!', 'success', 2500);
         } else {
-          showToast('Không thể nối node (tránh vòng lặp lặp lại).', 'error', 2500);
+          if (this.mindmap.moveNode(this.connectingSourceNodeId, nodeId)) {
+            showToast('🔗 Nối Node thành công! Lines đã được cập nhật.', 'success', 2500);
+          } else {
+            showToast('Không thể nối node (tránh vòng lặp lặp lại).', 'error', 2500);
+          }
         }
       }
       const prevEl = this.renderer.nodeElements.get(this.connectingSourceNodeId);
       if (prevEl) prevEl.classList.remove('connecting-source');
       this.connectingSourceNodeId = null;
+      this.connectMode = null;
+      this.renderMap();
+      return;
     }
     this.mindmap.selectNode(nodeId);
     this.updateFormattingBar(nodeId);
@@ -658,6 +790,58 @@ class App {
       const textInput = $('#line-text-input');
       if (textInput) {
         textInput.value = childNode.lineText || '';
+      }
+    }
+
+    const clientX = (e && typeof e.clientX === 'number') ? e.clientX : 200;
+    const clientY = (e && typeof e.clientY === 'number') ? e.clientY : 200;
+    box.style.left = `${Math.min(window.innerWidth - 310, Math.max(10, clientX + 10))}px`;
+    box.style.top = `${Math.min(window.innerHeight - 300, Math.max(70, clientY - 20))}px`;
+    box.classList.remove('hidden');
+    this.clampToViewport(box);
+    this.renderMap();
+  }
+
+  handleFreeConnectionClick(connectionId, e) {
+    this.selectedConnectionId = connectionId;
+    if (this.renderer) this.renderer.selectedConnectionId = connectionId;
+    this.selectedLineChildId = null;
+    this.allLinesSelected = false;
+    $('#btn-select-all-lines')?.classList.remove('active');
+
+    const box = $('#line-context-box');
+    if (!box) return;
+
+    const conn = (this.mindmap.connections || []).find(c => c.id === connectionId);
+    if (conn) {
+      const width = conn.lineWidth || 2;
+      box.querySelectorAll('.line-val-btn[data-width]').forEach(b => {
+        b.classList.toggle('active', parseInt(b.dataset.width) === width);
+      });
+
+      const opacity = conn.lineOpacity !== null && conn.lineOpacity !== undefined ? conn.lineOpacity : 1.0;
+      box.querySelectorAll('.line-val-btn[data-opacity]').forEach(b => {
+        b.classList.toggle('active', parseFloat(b.dataset.opacity) === opacity);
+      });
+
+      const dash = conn.lineDash || 'solid';
+      box.querySelectorAll('.line-val-btn[data-dash]').forEach(b => {
+        b.classList.toggle('active', b.dataset.dash === dash);
+      });
+
+      const color = conn.lineColor || '#38BDF8';
+      box.querySelectorAll('.line-swatch').forEach(s => {
+        s.classList.toggle('active', s.dataset.lineColor === color);
+      });
+
+      const arrow = conn.lineArrow || 'none';
+      box.querySelectorAll('.line-arrow-val-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.arrow === (arrow === true ? 'end' : arrow));
+      });
+
+      const textInput = $('#line-text-input');
+      if (textInput) {
+        textInput.value = conn.lineText || '';
       }
     }
 
@@ -908,6 +1092,20 @@ class App {
       this.triggerImageUpload();
     });
 
+    // Draw Free Line button
+    $('#btn-draw-free-line')?.addEventListener('click', () => {
+      const selected = this.mindmap.getSelectedNode();
+      if (!selected) {
+        showToast('Vui lòng chọn 1 Node nguồn trước khi vẽ Line', 'info', 2500);
+        return;
+      }
+      this.connectingSourceNodeId = selected.id;
+      this.connectMode = 'freeline';
+      const el = this.renderer.nodeElements.get(selected.id);
+      if (el) el.classList.add('connecting-source');
+      showToast('↗️ Đang ở chế độ Vẽ Line tự do: Click chọn Node mục tiêu để kết nối (hoặc Esc để hủy)!', 'info', 3500);
+    });
+
     // Select All Lines / Line styling box
     $('#btn-select-all-lines')?.addEventListener('click', () => {
       this.allLinesSelected = !this.allLinesSelected;
@@ -1017,6 +1215,10 @@ class App {
     $('#fmt-bold')?.classList.toggle('active', node.fontWeight === 'bold');
     $('#fmt-italic')?.classList.toggle('active', node.fontStyle === 'italic');
     $('#fmt-underline')?.classList.toggle('active', node.textDecoration === 'underline');
+    const textAlign = node.textAlign || 'left';
+    $('#fmt-align-left')?.classList.toggle('active', textAlign === 'left');
+    $('#fmt-align-center')?.classList.toggle('active', textAlign === 'center');
+    $('#fmt-align-right')?.classList.toggle('active', textAlign === 'right');
   }
 
   setupFormattingBarListeners() {
@@ -1152,6 +1354,10 @@ class App {
             } catch (err) {
               console.warn('fontFamily error:', err);
             }
+          } else if (cmd === 'justifyLeft' || cmd === 'justifyCenter' || cmd === 'justifyRight') {
+            const align = cmd === 'justifyCenter' ? 'center' : (cmd === 'justifyRight' ? 'right' : 'left');
+            textSpan.style.textAlign = align;
+            this.mindmap.updateNode(selectedNode.id, { textAlign: align });
           } else {
             document.execCommand(cmd, false, value);
           }
@@ -1188,6 +1394,9 @@ class App {
             this.mindmap.updateNode(selectedNode.id, { textDecoration: isUnderline ? 'none' : 'underline' });
           } else if (cmd === 'fontName') {
             this.mindmap.updateNode(selectedNode.id, { fontFamily: value });
+          } else if (cmd === 'justifyLeft' || cmd === 'justifyCenter' || cmd === 'justifyRight') {
+            const align = cmd === 'justifyCenter' ? 'center' : (cmd === 'justifyRight' ? 'right' : 'left');
+            this.mindmap.updateNode(selectedNode.id, { textAlign: align });
           }
           this.renderMap();
         }
@@ -1257,8 +1466,11 @@ class App {
     $('#fmt-superscript')?.addEventListener('mousedown', (e) => e.preventDefault());
     $('#fmt-superscript')?.addEventListener('click', (e) => { e.stopPropagation(); applyFormatCommand('superscript'); });
 
+    $('#fmt-align-left')?.addEventListener('mousedown', (e) => e.preventDefault());
     $('#fmt-align-left')?.addEventListener('click', (e) => { e.stopPropagation(); applyFormatCommand('justifyLeft'); });
+    $('#fmt-align-center')?.addEventListener('mousedown', (e) => e.preventDefault());
     $('#fmt-align-center')?.addEventListener('click', (e) => { e.stopPropagation(); applyFormatCommand('justifyCenter'); });
+    $('#fmt-align-right')?.addEventListener('mousedown', (e) => e.preventDefault());
     $('#fmt-align-right')?.addEventListener('click', (e) => { e.stopPropagation(); applyFormatCommand('justifyRight'); });
     $('#fmt-clear')?.addEventListener('click', (e) => { e.stopPropagation(); applyFormatCommand('removeFormat'); });
 
@@ -1360,9 +1572,9 @@ class App {
     });
 
     // Global image paste listener on Canvas & Nodes (Ctrl+V image)
-    document.addEventListener('paste', (e) => {
+    document.addEventListener('paste', async (e) => {
       const activeEl = document.activeElement;
-      if (activeEl && (activeEl.id === 'right-editor-content' || activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+      if (activeEl && (activeEl.id === 'right-editor-content' || activeEl.closest('#right-editor-panel') || activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
         return; // Skip if user is typing in an input, textarea, or right editor panel
       }
 
@@ -1374,26 +1586,25 @@ class App {
           imagePasted = true;
           const file = items[i].getAsFile();
           if (file) {
-            const reader = new FileReader();
-            reader.onload = (event) => {
-              const b64 = event.target.result;
-              const selected = this.mindmap.getSelectedNode() || this.mindmap.root;
-              if (selected) {
-                let imagesList = selected.images ? [...selected.images] : (selected.image ? [selected.image] : []);
-                imagesList.push({ src: b64, width: 180, height: 120 });
-                delete selected.customWidth;
-                delete selected.customHeight;
-                this.mindmap.updateNode(selected.id, {
-                  images: imagesList,
-                  customWidth: undefined,
-                  customHeight: undefined
-                });
-                this.saveCurrentMap(false);
-                this.renderMap();
-                showToast('📷 Đã tự động dán & lưu hình ảnh vào Node!', 'success', 2500);
-              }
-            };
-            reader.readAsDataURL(file);
+            e.preventDefault();
+            const b64 = await compressImageFile(file, 1200);
+            const selected = this.mindmap.getSelectedNode() || this.mindmap.root;
+            if (selected) {
+              let imagesList = selected.images ? [...selected.images] : (selected.image ? [selected.image] : []);
+              imagesList.push({ src: b64, width: 180, height: 120 });
+              delete selected.customWidth;
+              delete selected.customHeight;
+              delete selected.measuredWidth;
+              delete selected.measuredHeight;
+              this.mindmap.updateNode(selected.id, {
+                images: imagesList,
+                customWidth: undefined,
+                customHeight: undefined
+              });
+              this.saveCurrentMap(false);
+              this.renderMap();
+              showToast('📷 Đã tự động dán & tối ưu hình ảnh vào Node!', 'success', 2500);
+            }
           }
         }
       }
@@ -1426,7 +1637,9 @@ class App {
         box.querySelectorAll('.line-val-btn[data-width]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         const width = parseInt(btn.dataset.width);
-        if (this.selectedLineChildId) {
+        if (this.selectedConnectionId) {
+          this.mindmap.updateConnection(this.selectedConnectionId, { lineWidth: width });
+        } else if (this.selectedLineChildId) {
           this.mindmap.updateNode(this.selectedLineChildId, { lineWidth: width });
         } else {
           this.mindmap.setGlobalLineStyle({ width });
@@ -1441,7 +1654,9 @@ class App {
         box.querySelectorAll('.line-val-btn[data-opacity]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         const opacity = parseFloat(btn.dataset.opacity);
-        if (this.selectedLineChildId) {
+        if (this.selectedConnectionId) {
+          this.mindmap.updateConnection(this.selectedConnectionId, { lineOpacity: opacity });
+        } else if (this.selectedLineChildId) {
           this.mindmap.updateNode(this.selectedLineChildId, { lineOpacity: opacity });
         } else {
           this.mindmap.setGlobalLineStyle({ opacity });
@@ -1456,7 +1671,9 @@ class App {
         box.querySelectorAll('.line-val-btn[data-dash]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         const dash = btn.dataset.dash;
-        if (this.selectedLineChildId) {
+        if (this.selectedConnectionId) {
+          this.mindmap.updateConnection(this.selectedConnectionId, { lineDash: dash });
+        } else if (this.selectedLineChildId) {
           this.mindmap.updateNode(this.selectedLineChildId, { lineDash: dash });
         } else {
           this.mindmap.setGlobalLineStyle({ dash });
@@ -1471,7 +1688,9 @@ class App {
         box.querySelectorAll('.line-swatch').forEach(s => s.classList.remove('active'));
         swatch.classList.add('active');
         const color = swatch.dataset.lineColor;
-        if (this.selectedLineChildId) {
+        if (this.selectedConnectionId) {
+          this.mindmap.updateConnection(this.selectedConnectionId, { lineColor: color === 'inherit' ? null : color });
+        } else if (this.selectedLineChildId) {
           this.mindmap.updateNode(this.selectedLineChildId, { lineColor: color === 'inherit' ? null : color });
         } else {
           this.mindmap.setGlobalLineStyle({ color: color === 'inherit' ? null : color });
@@ -1486,7 +1705,9 @@ class App {
         box.querySelectorAll('.line-arrow-val-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         const arrow = btn.dataset.arrow;
-        if (this.selectedLineChildId) {
+        if (this.selectedConnectionId) {
+          this.mindmap.updateConnection(this.selectedConnectionId, { lineArrow: arrow });
+        } else if (this.selectedLineChildId) {
           this.mindmap.updateNode(this.selectedLineChildId, { lineArrow: arrow });
         } else {
           this.mindmap.setGlobalLineStyle({ arrow });
@@ -1501,7 +1722,10 @@ class App {
     if (textInput) {
       textInput.addEventListener('input', () => {
         const val = textInput.value;
-        if (this.selectedLineChildId) {
+        if (this.selectedConnectionId) {
+          this.mindmap.updateConnection(this.selectedConnectionId, { lineText: val });
+          this.renderMap();
+        } else if (this.selectedLineChildId) {
           this.mindmap.updateNode(this.selectedLineChildId, { lineText: val });
           this.renderMap();
         }
@@ -1509,7 +1733,14 @@ class App {
     }
 
     $('#btn-delete-line')?.addEventListener('click', () => {
-      if (this.selectedLineChildId) {
+      if (this.selectedConnectionId) {
+        this.mindmap.removeConnection(this.selectedConnectionId);
+        this.selectedConnectionId = null;
+        if (this.renderer) this.renderer.selectedConnectionId = null;
+        box.classList.add('hidden');
+        showToast('Đã xóa đường nối tự do!', 'success', 2000);
+        this.renderMap();
+      } else if (this.selectedLineChildId) {
         this.mindmap.detachNode(this.selectedLineChildId);
         this.selectedLineChildId = null;
         box.classList.add('hidden');
@@ -1643,9 +1874,19 @@ class App {
           case 'connect':
             if (selected) {
               this.connectingSourceNodeId = selected.id;
+              this.connectMode = 'reparent';
               const el = this.renderer.nodeElements.get(selected.id);
               if (el) el.classList.add('connecting-source');
               showToast('🔗 Đang ở chế độ Nối Node: Click chọn Node mục tiêu để nối line!', 'info', 3500);
+            }
+            break;
+          case 'freeline':
+            if (selected) {
+              this.connectingSourceNodeId = selected.id;
+              this.connectMode = 'freeline';
+              const el = this.renderer.nodeElements.get(selected.id);
+              if (el) el.classList.add('connecting-source');
+              showToast('↗️ Đang ở chế độ Vẽ Line tự do: Click chọn Node mục tiêu để kết nối!', 'info', 3500);
             }
             break;
           case 'edit':
@@ -1781,14 +2022,6 @@ class App {
     });
   }
 
-  triggerAutoSave() {
-    if (!this.mindmap) return;
-    if (!this.currentMapId) {
-      this.currentMapId = generateId();
-    }
-    this.currentMapName = $('#map-name')?.value?.trim() || this.i18n.t('map.untitled');
-    this.storage.autoSave(this.currentMapId, this.mindmap.toJSON(), this.currentMapName);
-  }
 
   // ==================== SAVE / LOAD ====================
 
@@ -2389,7 +2622,13 @@ class App {
         tree: this.mindmap.root
       };
 
-      const result = await this.gdrive.saveFile(name, JSON.stringify(treeData, null, 2), this.currentMapDriveId || null);
+      let result;
+      if (!this.currentMapDriveId && this.pendingDriveFolderId) {
+        result = await this.gdrive.createFileInFolder(name, JSON.stringify(treeData, null, 2), this.pendingDriveFolderId);
+        this.pendingDriveFolderId = null;
+      } else {
+        result = await this.gdrive.saveFile(name, JSON.stringify(treeData, null, 2), this.currentMapDriveId || null);
+      }
       if (result && result.id) {
         this.currentMapDriveId = result.id;
       }
@@ -2504,12 +2743,39 @@ class App {
         tempDiv.innerHTML = rawText;
         rawText = this.renderer.extractTextWithNewlines(tempDiv);
       }
-      const safeHtml = rawText
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/\n/g, '<br>');
-      content.innerHTML = safeHtml;
+      const hasHtml = /<\/?(?:span|div|p|b|strong|i|em|u|s|strike|font|img|br|ul|ol|li)\b[^>]*>/i.test(rawText);
+      if (hasHtml) {
+        content.innerHTML = rawText;
+      } else {
+        content.innerHTML = rawText
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/\n/g, '<br>');
+      }
+
+      // Backward compatibility: Convert existing node.images into inline <img> tags if not already present
+      const imagesList = node.images || (node.image ? [typeof node.image === 'string' ? { src: node.image } : node.image] : []);
+      if (Array.isArray(imagesList) && imagesList.length > 0) {
+        imagesList.forEach(imgObj => {
+          const src = typeof imgObj === 'string' ? imgObj : (imgObj ? imgObj.src : null);
+          const w = imgObj && imgObj.width ? imgObj.width : 160;
+          if (src && !content.innerHTML.includes(src.substring(0, 50))) {
+            const img = document.createElement('img');
+            img.src = src;
+            img.className = 'inline-editor-image';
+            img.style.width = `${w}px`;
+            img.style.maxWidth = '100%';
+            img.style.display = 'inline-block';
+            img.style.verticalAlign = 'middle';
+            img.style.margin = '4px 6px';
+            img.contentEditable = 'false';
+            content.appendChild(img);
+          }
+        });
+      }
+
+      content.style.textAlign = node.textAlign || 'left';
     }
 
     if ($('#right-fmt-font-size')) $('#right-fmt-font-size').value = String(node.fontSize || 14);
@@ -2521,6 +2787,13 @@ class App {
 
     // Load or initialize persistent undo/redo history for this specific node
     this.loadOrCreateRightEditorHistory(node.id);
+
+    try {
+      const savedWidth = parseInt(localStorage.getItem('mindflow_context_box_width'), 10);
+      if (savedWidth && savedWidth >= 380 && savedWidth <= window.innerWidth - 40) {
+        drawer.style.width = `${savedWidth}px`;
+      }
+    } catch (err) {}
 
     drawer?.classList.add('open');
     setTimeout(() => {
@@ -2822,26 +3095,25 @@ class App {
     const contentEl = $('#right-editor-content');
     if (!contentEl) return;
 
-    const cleanText = this.renderer.extractTextWithNewlines(contentEl);
-    let newText = cleanText;
+    let newText = contentEl.innerHTML;
     if (newText.trim() === '' || newText.trim() === '<br>') {
       newText = 'Topic';
     }
 
     const fontSize = parseInt($('#right-fmt-font-size')?.value || 14);
     const fontFamily = $('#right-fmt-font-family')?.value || 'Inter';
+    const textAlign = contentEl.style.textAlign || 'left';
 
+    // Automatically adapt node size to user's text setup
     const updatePayload = {
       text: newText,
       fontSize: fontSize,
       fontFamily: fontFamily,
-      images: this.rightEditorImages
+      textAlign: textAlign,
+      images: this.rightEditorImages || [],
+      customWidth: undefined,
+      customHeight: undefined
     };
-
-    if (autoFit) {
-      updatePayload.customWidth = undefined;
-      updatePayload.customHeight = undefined;
-    }
 
     // Single atomic update to node
     this.mindmap.updateNode(this.editingRightNodeId, updatePayload);
@@ -2878,6 +3150,99 @@ class App {
     $('#right-fmt-undo')?.addEventListener('click', () => this.undoRightEditor());
     $('#right-fmt-redo')?.addEventListener('click', () => this.redoRightEditor());
 
+    // Horizontal Drag Resize Handle for Context Box
+    const resizeHandle = $('#right-editor-resize-handle');
+    const drawer = $('#right-editor-panel');
+    let isResizingDrawer = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    const onResizeStart = (clientX) => {
+      isResizingDrawer = true;
+      startX = clientX;
+      startWidth = drawer ? drawer.offsetWidth : 580;
+      drawer?.classList.add('resizing');
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+    };
+
+    const onResizeMove = (clientX) => {
+      if (!isResizingDrawer || !drawer) return;
+      const dx = startX - clientX;
+      const minW = 380;
+      const maxW = Math.max(minW, window.innerWidth - 50);
+      const newWidth = Math.min(maxW, Math.max(minW, startWidth + dx));
+      drawer.style.width = `${newWidth}px`;
+    };
+
+    const onResizeEnd = () => {
+      if (isResizingDrawer) {
+        isResizingDrawer = false;
+        drawer?.classList.remove('resizing');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        if (drawer) {
+          try {
+            localStorage.setItem('mindflow_context_box_width', String(drawer.offsetWidth));
+          } catch (err) {}
+        }
+      }
+    };
+
+    resizeHandle?.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onResizeStart(e.clientX);
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (isResizingDrawer) {
+        onResizeMove(e.clientX);
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isResizingDrawer) {
+        onResizeEnd();
+      }
+    });
+
+    // Touch support for dragging resize handle on mobile / tablets
+    resizeHandle?.addEventListener('touchstart', (e) => {
+      if (e.touches && e.touches[0]) {
+        onResizeStart(e.touches[0].clientX);
+      }
+    }, { passive: true });
+
+    document.addEventListener('touchmove', (e) => {
+      if (isResizingDrawer && e.touches && e.touches[0]) {
+        onResizeMove(e.touches[0].clientX);
+      }
+    }, { passive: true });
+
+    document.addEventListener('touchend', () => {
+      if (isResizingDrawer) {
+        onResizeEnd();
+      }
+    });
+
+    // Quick Width Toggle Button (Standard 580px vs Wide Mode)
+    $('#btn-toggle-width-right-editor')?.addEventListener('click', () => {
+      if (!drawer) return;
+      const currentWidth = drawer.offsetWidth;
+      const isWide = currentWidth >= 700;
+      if (isWide) {
+        drawer.style.width = '580px';
+        try { localStorage.setItem('mindflow_context_box_width', '580'); } catch (err) {}
+        showToast('↔ Thu gọn chiều ngang (580px)', 'info', 1500);
+      } else {
+        const wideW = Math.min(880, Math.round(window.innerWidth * 0.65));
+        drawer.style.width = `${wideW}px`;
+        try { localStorage.setItem('mindflow_context_box_width', String(wideW)); } catch (err) {}
+        showToast('↔ Mở rộng chiều ngang (' + wideW + 'px)', 'info', 1500);
+      }
+    });
+
     // Intercept keyboard shortcuts in Context Box ONLY when panel is open
     $('#right-editor-panel')?.addEventListener('keydown', (e) => {
       const drawer = $('#right-editor-panel');
@@ -2908,6 +3273,10 @@ class App {
         e.preventDefault();
         e.stopPropagation();
         this.closeRightEditorPanel();
+      } else if ((isCtrl && e.shiftKey && (e.key === 'e' || e.key === 'E')) || (e.altKey && (e.key === 'w' || e.key === 'W'))) {
+        e.preventDefault();
+        e.stopPropagation();
+        $('#btn-toggle-width-right-editor')?.click();
       }
     });
 
@@ -2915,6 +3284,18 @@ class App {
     const imageInput = $('#right-image-input');
     const imageBtn = $('#right-fmt-image-btn');
     const mathBtn = $('#right-fmt-math-btn');
+
+    // Horizontal scroll support via mouse wheel (or Shift+Wheel)
+    contentEl?.addEventListener('wheel', (e) => {
+      if (contentEl.scrollWidth > contentEl.clientWidth) {
+        if (e.shiftKey || Math.abs(e.deltaX) > 0) return; // browser native horizontal
+        // When user scrolls wheel horizontally or if text has horizontal overflow:
+        if (Math.abs(e.deltaY) > 0 && e.altKey) {
+          contentEl.scrollLeft += e.deltaY;
+          e.preventDefault();
+        }
+      }
+    }, { passive: false });
 
     // Debounced local state recording on typing input
     const debouncedInputSave = debounce(() => {
@@ -2939,43 +3320,66 @@ class App {
 
     imageBtn?.addEventListener('click', () => imageInput?.click());
 
-    imageInput?.addEventListener('change', (e) => {
+    imageInput?.addEventListener('change', async (e) => {
       const files = Array.from(e.target.files || []);
-      if (files.length > 0) {
-        this.saveRightEditorLocalState();
-      }
-      files.forEach(file => {
+      for (const file of files) {
         if (file.type.startsWith('image/')) {
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            this.rightEditorImages.push({ src: event.target.result, width: 160, height: 100 });
-            this.renderRightEditorImages();
-            this.saveRightEditorLocalState();
-          };
-          reader.readAsDataURL(file);
+          const b64 = await compressImageFile(file, 900);
+          const img = document.createElement('img');
+          img.src = b64;
+          img.className = 'inline-editor-image';
+          img.style.width = '160px';
+          img.style.maxWidth = '100%';
+          img.style.display = 'inline-block';
+          img.style.verticalAlign = 'middle';
+          img.style.margin = '4px 6px';
+          img.contentEditable = 'false';
+          contentEl.appendChild(img);
+          this.saveRightEditorLocalState();
+          showToast('📷 Đã chèn hình ảnh vào nội dung!', 'success', 2000);
         }
-      });
+      }
       imageInput.value = '';
     });
 
-    contentEl?.addEventListener('paste', (e) => {
+    contentEl?.addEventListener('paste', async (e) => {
       const items = e.clipboardData ? e.clipboardData.items : [];
       let imagePasted = false;
 
       for (let i = 0; i < items.length; i++) {
         if (items[i].type.indexOf('image') !== -1) {
           imagePasted = true;
+          e.preventDefault();
+          e.stopPropagation();
           const file = items[i].getAsFile();
           if (file) {
             this.saveRightEditorLocalState();
-            const reader = new FileReader();
-            reader.onload = (event) => {
-              this.rightEditorImages.push({ src: event.target.result, width: 160, height: 100 });
-              this.renderRightEditorImages();
-              this.saveRightEditorLocalState();
-              showToast('📷 Đã tự động nhận diện & chèn hình ảnh từ bộ nhớ tạm!', 'success', 2000);
-            };
-            reader.readAsDataURL(file);
+            const b64 = await compressImageFile(file, 900);
+            const sel = window.getSelection();
+            const img = document.createElement('img');
+            img.src = b64;
+            img.className = 'inline-editor-image';
+            img.style.width = '160px';
+            img.style.maxWidth = '100%';
+            img.style.display = 'inline-block';
+            img.style.verticalAlign = 'middle';
+            img.style.margin = '4px 6px';
+            img.contentEditable = 'false';
+
+            if (sel && sel.rangeCount > 0 && contentEl.contains(sel.anchorNode)) {
+              const range = sel.getRangeAt(0);
+              range.deleteContents();
+              range.insertNode(img);
+              range.setStartAfter(img);
+              range.collapse(true);
+              sel.removeAllRanges();
+              sel.addRange(range);
+              this.savedRightRange = range.cloneRange();
+            } else {
+              contentEl.appendChild(img);
+            }
+            this.saveRightEditorLocalState();
+            showToast('📷 Đã chèn hình ảnh trực tiếp vào dòng chữ!', 'success', 2000);
           }
         }
       }
@@ -3324,9 +3728,33 @@ class App {
       this.saveRightEditorLocalState();
     });
 
-    $('#right-fmt-align-left')?.addEventListener('click', () => applyCmd('justifyLeft'));
-    $('#right-fmt-align-center')?.addEventListener('click', () => applyCmd('justifyCenter'));
-    $('#right-fmt-align-right')?.addEventListener('click', () => applyCmd('justifyRight'));
+    const setRightAlignment = (align) => {
+      this.saveRightEditorLocalState();
+      restoreSelection();
+      contentEl.style.textAlign = align;
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0 && contentEl.contains(sel.anchorNode)) {
+        let node = sel.anchorNode;
+        while (node && node !== contentEl && node.parentNode !== contentEl) {
+          node = node.parentNode;
+        }
+        if (node && node !== contentEl) {
+          if (node.nodeType === 1) {
+            node.style.textAlign = align;
+          } else {
+            const div = document.createElement('div');
+            div.style.textAlign = align;
+            node.parentNode.insertBefore(div, node);
+            div.appendChild(node);
+          }
+        }
+      }
+      this.saveRightEditorLocalState();
+    };
+
+    $('#right-fmt-align-left')?.addEventListener('click', () => setRightAlignment('left'));
+    $('#right-fmt-align-center')?.addEventListener('click', () => setRightAlignment('center'));
+    $('#right-fmt-align-right')?.addEventListener('click', () => setRightAlignment('right'));
 
     const colorBtn = $('#right-fmt-color-btn');
     const colorPal = $('#right-color-palette');
