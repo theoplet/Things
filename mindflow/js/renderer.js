@@ -98,8 +98,9 @@ export class Renderer {
       element.style.height = node.customHeight ? `${node.customHeight}px` : 'auto';
     }
 
-    if (node.color && !isRoot) {
-      element.style.borderLeft = `3px solid ${node.color}`;
+    if (node.color) {
+      element.style.background = node.color;
+      element.style.borderLeft = 'none';
     }
 
     // Top-Left Icon Badge
@@ -168,6 +169,14 @@ export class Renderer {
         textSpan.style.textShadow = '0 1px 3px rgba(0,0,0,0.9), 0 0 2px #000';
       } else {
         textSpan.style.textShadow = '';
+      }
+    } else if (node.color) {
+      const contrastColor = this.getContrastTextColor(node.color);
+      textSpan.style.color = contrastColor;
+      if (contrastColor === '#FFFFFF') {
+        textSpan.style.textShadow = '0 1px 3px rgba(0,0,0,0.9), 0 0 2px #000';
+      } else {
+        textSpan.style.textShadow = 'none';
       }
     }
     if (node.fontWeight) textSpan.style.fontWeight = node.fontWeight;
@@ -430,6 +439,17 @@ export class Renderer {
         } else {
           textSpan.style.textShadow = '';
         }
+      } else if (node.color) {
+        textSpan.style.backgroundColor = '';
+        textSpan.style.padding = '';
+        textSpan.style.borderRadius = '';
+        const contrastColor = this.getContrastTextColor(node.color);
+        textSpan.style.color = contrastColor;
+        if (contrastColor === '#FFFFFF') {
+          textSpan.style.textShadow = '0 1px 3px rgba(0,0,0,0.9), 0 0 2px #000';
+        } else {
+          textSpan.style.textShadow = 'none';
+        }
       } else {
         textSpan.style.backgroundColor = '';
         textSpan.style.padding = '';
@@ -542,12 +562,10 @@ export class Renderer {
     if (wasEditing) element.classList.add('editing');
     if (hadMath) element.classList.add('has-math');
     if (node.color) {
-      if (!isRoot) {
-        element.style.borderLeft = `3px solid ${node.color}`;
-      } else {
-        element.style.borderLeft = '';
-      }
+      element.style.background = node.color;
+      element.style.borderLeft = 'none';
     } else {
+      element.style.background = '';
       element.style.borderLeft = '';
     }
   }
@@ -728,18 +746,22 @@ export class Renderer {
         pathElement.setAttribute('class', `connector-path ${lineD} ${this.allLinesSelected ? 'selected-connector' : ''}`);
 
         const arrowDir = child.lineArrow || gStyle.arrow || 'none';
-        if (arrowDir === 'end' || arrowDir === true) {
-          pathElement.setAttribute('marker-end', 'url(#arrow-end)');
-          pathElement.removeAttribute('marker-start');
-        } else if (arrowDir === 'start') {
-          pathElement.setAttribute('marker-start', 'url(#arrow-start)');
+        if (arrowDir === 'none') {
           pathElement.removeAttribute('marker-end');
-        } else if (arrowDir === 'both') {
-          pathElement.setAttribute('marker-end', 'url(#arrow-end)');
-          pathElement.setAttribute('marker-start', 'url(#arrow-start)');
+          pathElement.removeAttribute('marker-start');
         } else {
-          pathElement.removeAttribute('marker-end');
-          pathElement.removeAttribute('marker-start');
+          if (arrowDir === 'end' || arrowDir === true || arrowDir === 'both') {
+            const endKey = this.getOrCreateArrowMarker(lineColor, lineW, 'end');
+            pathElement.setAttribute('marker-end', `url(#${endKey})`);
+          } else {
+            pathElement.removeAttribute('marker-end');
+          }
+          if (arrowDir === 'start' || arrowDir === 'both') {
+            const startKey = this.getOrCreateArrowMarker(lineColor, lineW, 'start');
+            pathElement.setAttribute('marker-start', `url(#${startKey})`);
+          } else {
+            pathElement.removeAttribute('marker-start');
+          }
         }
 
         // Render Line Text Label if present
