@@ -20,10 +20,10 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 
   <!-- Stylesheets -->
-  <link rel="stylesheet" href="css/index.css?v=84.0">
-  <link rel="stylesheet" href="css/canvas.css?v=84.0">
-  <link rel="stylesheet" href="css/toolbar.css?v=84.0">
-  <link rel="stylesheet" href="css/animations.css?v=84.0">
+  <link rel="stylesheet" href="css/index.css?v=85.0">
+  <link rel="stylesheet" href="css/canvas.css?v=85.0">
+  <link rel="stylesheet" href="css/toolbar.css?v=85.0">
+  <link rel="stylesheet" href="css/animations.css?v=85.0">
 
   <style>
     /* Additional inline styles */
@@ -58,11 +58,6 @@
       stroke-width: 2;
       stroke-linecap: round;
       stroke-linejoin: round;
-    }
-    /* Drop target highlight for drag & drop */
-    .mindmap-node.drop-target {
-      border-color: var(--color-secondary) !important;
-      box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.3) !important;
     }
     .toolbar-btn[data-tooltip] {
       position: relative;
@@ -357,6 +352,9 @@
 
     <!-- Line & Formatting operations -->
     <div class="toolbar-group">
+      <button id="btn-draw-free-line" class="toolbar-btn" data-tooltip="Vẽ Line tự do nối 2 Node" title="Vẽ Line tự do nối 2 Node" style="color: #38BDF8;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19L20 5M20 5h-6M20 5v6"/><circle cx="4" cy="19" r="2.5" fill="currentColor"/><circle cx="20" cy="5" r="2.5" fill="currentColor"/></svg>
+      </button>
       <button id="btn-select-all-lines" class="toolbar-btn" data-tooltip="Select All Lines" data-i18n-title="toolbar.selectAllLines" style="color: #06B6D4;">
         <svg viewBox="0 0 24 24"><path d="M4 12h16M4 6h16M4 18h16" stroke-dasharray="3 3"/></svg>
       </button>
@@ -513,6 +511,7 @@
     <div class="dropdown-item" data-action="addChild"><span>➕</span><span data-i18n="context.addChild">Add Child Node</span><span class="shortcut">Tab</span></div>
     <div class="dropdown-item" data-action="addSibling"><span>➕</span><span data-i18n="context.addSibling">Add Sibling Node</span><span class="shortcut">Enter</span></div>
     <div class="dropdown-item" data-action="connect"><span>🔗</span><span>Nối Node (Connect)</span></div>
+    <div class="dropdown-item" data-action="freeline"><span>↗️</span><span>Vẽ Line tự do (Free Line)</span></div>
     <div class="dropdown-item" data-action="edit"><span>✏️</span><span data-i18n="context.edit">Edit Text</span><span class="shortcut">Space</span></div>
     <div style="height: 1px; background: var(--color-border); margin: 4px 6px;"></div>
     <div class="dropdown-item" data-action="color"><span>🎨</span><span data-i18n="context.color">Change Color</span></div>
@@ -532,14 +531,21 @@
 
   <!-- ==================== RIGHT-SIDE NODE EDITOR PANEL ==================== -->
   <div id="right-editor-panel" class="right-editor-drawer">
+    <!-- Horizontal Drag Resize Handle on left border -->
+    <div id="right-editor-resize-handle" class="right-editor-resize-handle" title="Kéo sang trái để mở rộng chiều ngang"></div>
     <div class="right-editor-header">
       <div class="right-editor-title">
         <span style="font-size: 18px;">✏️</span>
         <span style="font-weight: 700; font-size: 15px; color: #F8FAFC;">Chỉnh Sửa Node</span>
       </div>
-      <button id="btn-close-right-editor" class="toolbar-btn modal-close-btn" title="Đóng">
-        <svg viewBox="0 0 24 24" style="width: 18px; height: 18px;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </button>
+      <div class="right-editor-header-actions" style="display: flex; align-items: center; gap: 6px;">
+        <button id="btn-toggle-width-right-editor" class="toolbar-btn" title="Mở rộng / Thu gọn chiều ngang">
+          <svg viewBox="0 0 24 24" style="width: 18px; height: 18px;"><polyline points="7 8 3 12 7 16"></polyline><polyline points="17 8 21 12 17 16"></polyline><line x1="3" y1="12" x2="21" y2="12"></line></svg>
+        </button>
+        <button id="btn-close-right-editor" class="toolbar-btn modal-close-btn" title="Đóng">
+          <svg viewBox="0 0 24 24" style="width: 18px; height: 18px;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
     </div>
 
     <div class="right-editor-body">
@@ -633,13 +639,13 @@
       </div>
 
       <!-- Rich Editor Content Editable Area -->
-      <div class="right-editor-area-wrapper">
+      <div id="right-editor-area-wrapper" class="right-editor-area-wrapper">
         <label class="editor-label">Văn bản & Nội dung Node (Hỗ trợ Paste ảnh Ctrl+V):</label>
         <div id="right-editor-content" class="right-editor-content" contenteditable="true" placeholder="Nhập chữ, dán ảnh (Ctrl+V) hoặc chèn công thức toán..."></div>
       </div>
 
-      <!-- Attached Images Gallery (Max 3 per row in node) -->
-      <div class="right-images-section">
+      <!-- Attached Images Gallery (Legacy / Hidden for Inline Editing) -->
+      <div class="right-images-section" style="display: none;">
         <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px;">
           <label class="editor-label" style="margin-bottom: 0;">Danh sách Hình ảnh đã chèn:</label>
           <span style="font-size: 11px; color: #94A3B8; opacity: 0.85;">(Kéo thả hoặc bấm ◀ ▶ để đổi thứ tự)</span>
@@ -1154,7 +1160,7 @@
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 
   <!-- ==================== APP SCRIPT ==================== -->
-  <script type="module" src="js/app.js?v=84.0"></script>
+  <script type="module" src="js/app.js?v=85.0"></script>
 </body>
 </html>
 
